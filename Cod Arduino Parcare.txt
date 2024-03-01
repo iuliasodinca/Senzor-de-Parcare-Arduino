@@ -1,0 +1,264 @@
+#include <Adafruit_NeoPixel.h> //Library needed fot the neopixelstrip
+
+#define PIN 2 // input pin Neopixel is attached to
+#define BUTTON_PIN 4
+#define ULTRASONIC_TRIG_PIN 7
+#define ULTRASONIC_ECHO_PIN 8
+#define BUZZER_PIN 12
+#define LED_PIN 13
+
+#define POTENTIOMETER_PIN A5
+#define RED_LED_PIN 11
+#define GREEN_LED_PIN 10
+#define BLUE_LED_PIN 9
+
+#define UPPER_LIMIT 118
+#define LOWER_LIMIT 12
+#define THRESHOLD 13.25
+
+#define BUZZER_NOTE 1000
+
+#define NUMPIXELS 12 // number of neopixels in strip
+
+#define GREEN 0, 255, 0
+#define YELLOW 255, 255, 0
+#define ORANGE 255, 80, 0
+#define RED 255, 0, 0
+#define NO_COLOR 0, 0, 0
+
+#define _30_PERCENT_OF_255 76.5
+#define _60_PERCENT_OF_255 153
+
+#define STRIP_OFF_DELAY 4000
+
+Adafruit_NeoPixel pixels = Adafruit_NeoPixel(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
+
+int redColor = 0;
+int greenColor = 0;
+int blueColor = 0;
+
+int barState = HIGH;
+int buttonState;
+int lastButtonState = LOW;
+
+unsigned long lastDebounceTime = 0;
+unsigned long debounceDelay = 10;
+
+int inches = 0;
+int cm = 0;
+
+// check if button is pressed
+int getBarState(int reading)
+{
+    if (reading != lastButtonState)
+    {
+        lastDebounceTime = millis();
+    }
+
+    if ((millis() - lastDebounceTime) > debounceDelay)
+    {
+        // whatever the reading is at, it's been there for longer than the debounce
+        // delay, so take it as the actual current state:
+
+        // if the button state has changed:
+        if (reading != buttonState)
+        {
+            buttonState = reading;
+
+            // only toggle the LED if the new button state is HIGH
+            if (buttonState == HIGH)
+            {
+                barState = !barState;
+            }
+        }
+    }
+
+    // save the reading. Next time through the loop, it'll be the lastButtonState:
+    lastButtonState = reading;
+
+    return barState;
+}
+
+// determines the last bar that should be lit
+int getFinalPixel(int inches)
+{
+    int i = -1;
+    while (inches < UPPER_LIMIT - i * THRESHOLD && i < 9)
+        i++;
+    return i;
+}
+
+// determines the frequency of the buzzer sound
+int getSoundDuration(int pixel)
+{
+    if (pixel >= 3 && pixel <= 5) // yellow 1s
+        return 1000;
+    if (pixel >= 6 && pixel <= 7) // orange 800ms
+        return 800;
+    if (pixel >= 8 && pixel <= 9) // red 200ms
+        return 200;
+
+    return 0;
+}
+
+// splits delay in multiples of 10 ms
+void splitDelay(int duration)
+{
+    for (int i = 0; i < duration / 10; i++)
+    {
+        int reading = digitalRead(BUTTON_PIN);
+        if (getBarState(reading) == HIGH)
+        {
+            return;
+        }
+        delay(10);
+    }
+}
+
+// activates buzzer
+int playSound(int inches)
+{
+    int pixel = getFinalPixel(inches);
+    int duration = getSoundDuration(pixel);
+    tone(BUZZER_PIN, BUZZER_NOTE, duration);
+    splitDelay(duration);
+    noTone(BUZZER_PIN);
+    splitDelay(duration);
+}
+
+// Sets the color of the bar according to the distance from the detected object
+void choosePixelColor(int i)
+{
+    if (i >= 0 && i <= 2)
+        pixels.setPixelColor(i, pixels.Color(GREEN));
+    if (i >= 3 && i <= 5)
+        pixels.setPixelColor(i, pixels.Color(YELLOW));
+    if (i >= 6 && i <= 7)
+        pixels.setPixelColor(i, pixels.Color(ORANGE));
+    if (i >= 8 && i <= 9)
+        pixels.setPixelColor(i, pixels.Color(RED));
+}
+
+// colors all neccesary bars
+void setBarPixels(int inches)
+{
+    int i = getFinalPixel(inches);
+    resetPixels(i+1, 9);
+    for (int j = 0; j <= i; j++)
+        choosePixelColor(j);
+    pixels.show();
+}
+
+long readUltrasonicDistance(int triggerPin, int echoPin)
+{
+    pinMode(triggerPin, OUTPUT); // Clear the trigger
+    digitalWrite(triggerPin, LOW);
+    delayMicroseconds(2);
+    // Sets the trigger pin to HIGH state for 10 microseconds
+    digitalWrite(triggerPin, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(triggerPin, LOW);
+    pinMode(echoPin, INPUT);
+    // Reads the echo pin, and returns the sound wave travel time in microseconds
+    return pulseIn(echoPin, HIGH);
+}
+
+void resetPixels(int start, int end)
+{
+    for (int i = start; i < end + 1; i++)
+    {
+        pixels.setPixelColor(i, pixels.Color(NO_COLOR));
+        pixels.show();
+    }
+}
+
+// determines the led status according to the given value and returns true when the car is running
+bool setLedStatus(int value)
+{
+    if (value <= _30_PERCENT_OF_255)
+    {
+        analogWrite(RED_LED_PIN, 255);
+        analogWrite(GREEN_LED_PIN, 0);
+        analogWrite(BLUE_LED_PIN, 0);
+    }
+    else if (value <= _60_PERCENT_OF_255)
+    {
+        analogWrite(RED_LED_PIN, 255);
+        analogWrite(GREEN_LED_PIN, 255);
+        analogWrite(BLUE_LED_PIN, 0);
+        return true;
+    }
+    else
+    {
+        analogWrite(RED_LED_PIN, 0);
+        analogWrite(GREEN_LED_PIN, 255);
+        analogWrite(BLUE_LED_PIN, 0);
+        return true;
+    }
+
+    return false;
+}
+
+// checks given arguments and runs the parking sensor accordingly to the given conditions
+void parkingSensor(bool isRunning, int barState)
+{
+    if (isRunning)
+    {
+        inches = readUltrasonicDistance(ULTRASONIC_TRIG_PIN, ULTRASONIC_ECHO_PIN);
+
+        if (barState == LOW)
+        {
+            digitalWrite(LED_PIN, LOW);
+            // measure the ping time in cm
+            cm = 0.01723 * inches;
+            // convert to inches by dividing by 2.54
+            inches = (cm / 2.54);
+
+            setBarPixels(inches);
+            playSound(inches);
+        }
+        else
+        {
+            digitalWrite(LED_PIN, HIGH);
+            resetPixels(0, 9);
+        }
+    }
+    else
+    {
+        digitalWrite(LED_PIN, LOW);
+        noTone(BUZZER_PIN);
+        delay(STRIP_OFF_DELAY);
+        resetPixels(0, 9);
+    }
+}
+
+void setup()
+{
+    // Initialize the NeoPixel library.
+    pixels.begin();
+    pinMode(BUTTON_PIN, INPUT);
+    pinMode(LED_PIN, OUTPUT);
+
+    pinMode(POTENTIOMETER_PIN, INPUT);
+    pinMode(RED_LED_PIN, OUTPUT);
+    pinMode(GREEN_LED_PIN, OUTPUT);
+    pinMode(BLUE_LED_PIN, OUTPUT);
+
+    Serial.begin(9600);
+}
+
+void loop()
+{
+    int reading = digitalRead(BUTTON_PIN);
+
+    // read the analog in value:
+    int key_status = analogRead(POTENTIOMETER_PIN);
+    // map it to the range of the analog out:
+    int outputValue = map(key_status, 0, 1023, 0, 255);
+    // change the analog out value:
+    bool isRunning = setLedStatus(outputValue);
+
+    barState = getBarState(reading);
+
+    parkingSensor(isRunning, barState);
+}
